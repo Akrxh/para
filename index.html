@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Journal Transfer</title>
+<style>
+  * { -webkit-box-sizing: border-box; box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: #e8edf3; color: #1c2b4a;
+    font-family: -apple-system, "Helvetica Neue", Roboto, Arial, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; padding: 16px 14px 40px; }
+  h1 { font-size: 22px; margin: 6px 0 4px; font-weight: 700; }
+  .sub { margin: 0 0 16px; font-size: 14px; color: #55627d; line-height: 1.4; }
+  label { display: block; font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+  .codebox { margin-bottom: 14px; }
+  #code {
+    width: 100%; font-size: 24px; letter-spacing: 6px; text-align: center;
+    padding: 10px; border: 2px solid #1c2b4a; border-radius: 8px; background: #fff;
+    color: #1c2b4a; -webkit-appearance: none; appearance: none;
+  }
+  #text {
+    width: 100%; height: 300px; padding: 12px 12px 12px 14px;
+    font-family: Georgia, "Times New Roman", serif; font-size: 17px; line-height: 28px;
+    color: #1c2b4a; background-color: #fffef9;
+    background-image: -webkit-linear-gradient(transparent 27px, #c9d5e8 27px);
+    background-image: linear-gradient(transparent 27px, #c9d5e8 27px);
+    background-size: 100% 28px; background-attachment: local;
+    border: 2px solid #1c2b4a; border-radius: 8px; resize: vertical;
+    -webkit-appearance: none; appearance: none;
+  }
+  .count { text-align: right; font-size: 12px; color: #55627d; margin: 4px 2px 12px; }
+  .row { display: -webkit-box; display: -webkit-flex; display: flex; margin: 0 -4px 8px; }
+  .row button { -webkit-box-flex: 1; -webkit-flex: 1; flex: 1; margin: 0 4px; }
+  button {
+    font-size: 16px; font-weight: 600; padding: 14px 8px; border-radius: 8px;
+    border: 2px solid #1c2b4a; background: #fff; color: #1c2b4a;
+    -webkit-appearance: none; appearance: none; cursor: pointer;
+  }
+  button.main { background: #1c2b4a; color: #fff; }
+  button:active { opacity: 0.7; }
+  button:disabled { opacity: 0.5; }
+  #status {
+    margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 15px;
+    line-height: 1.4; background: #fff; border: 1px solid #c9d5e8; min-height: 42px;
+  }
+  #status.ok { border-color: #2e7d4f; color: #1d5a37; }
+  #status.err { border-color: #b3261e; color: #8c1d18; }
+  #mode { font-size: 12px; color: #55627d; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Journal Transfer</h1>
+  <p class="sub">Use the same 6-digit code on both phones. Send on one, get on the other.</p>
+
+  <div class="codebox">
+    <label for="code">Code</label>
+    <input id="code" type="tel" inputmode="numeric" maxlength="6" placeholder="------" autocomplete="off">
+  </div>
+
+  <label for="text">Journal text</label>
+  <textarea id="text" placeholder="Paste or write your journal here"></textarea>
+  <div class="count" id="count">0 characters</div>
+
+  <div class="row">
+    <button class="main" id="btnSend" type="button">Send</button>
+    <button class="main" id="btnGet" type="button">Get</button>
+  </div>
+  <div class="row">
+    <button id="btnCopy" type="button">Copy</button>
+    <button id="btnPaste" type="button">Paste</button>
+    <button id="btnClear" type="button">Clear</button>
+  </div>
+
+  <div id="status">Enter a code, then tap Send or Get.</div>
+  <div id="mode"></div>
+</div>
+
+<!-- Firebase 8.10.1 (namespaced) is used on purpose: it still runs on old iPhone Safari -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------- 1. FIREBASE CONFIG (fill in when you add Firestore) ----------
+  var firebaseConfig = {
+    apiKey: "AIzaSyCHwgUmjEpCkNnzVIChOlOBGrQvHW0YuYE",
+    authDomain: "para-graph.firebaseapp.com",
+    projectId: "para-graph",
+    storageBucket: "para-graph.firebasestorage.app",
+    messagingSenderId: "531345930278",
+    appId: "1:531345930278:web:4dbd9cd39bdf9d77adcee7"
+  };
+
+  // ---------- 2. STORAGE LAYER (the only part that talks to a database) ----------
+  // Both functions use callbacks: cb(errorMessageOrNull, resultText)
+  var Store = (function () {
+    var useCloud = !!(window.firebase && firebaseConfig.apiKey && firebaseConfig.projectId);
+    var db = null;
+    if (useCloud) {
+      try {
+        firebase.initializeApp(firebaseConfig);
+        db = firebase.firestore();
+      } catch (e) { useCloud = false; }
+    }
+
+    function localKey(code) { return "journal-transfer-" + code; }
+
+    return {
+      cloud: useCloud,
+      save: function (code, text, cb) {
+        if (useCloud) {
+          db.collection("transfers").doc(code).set({
+            text: text,
+            updated: new Date().getTime()
+          }).then(function () { cb(null); })
+            .catch(function (e) { cb("Could not send: " + (e && e.message ? e.message : e)); });
+        } else {
+          try { localStorage.setItem(localKey(code), text); cb(null); }
+          catch (e) { cb("Could not save on this phone."); }
+        }
+      },
+      load: function (code, cb) {
+        if (useCloud) {
+          db.collection("transfers").doc(code).get().then(function (snap) {
+            if (!snap.exists) { cb("Nothing found for this code yet.", null); return; }
+            cb(null, snap.data().text || "");
+          }).catch(function (e) {
+            cb("Could not get: " + (e && e.message ? e.message : e), null);
+          });
+        } else {
+          var v = null;
+          try { v = localStorage.getItem(localKey(code)); } catch (e) {}
+          if (v === null) { cb("Nothing found for this code yet.", null); return; }
+          cb(null, v);
+        }
+      }
+    };
+  })();
+
+  // ---------- 3. UI ----------
+  function $(id) { return document.getElementById(id); }
+  var codeEl = $("code"), textEl = $("text"), statusEl = $("status"), countEl = $("count");
+
+  function say(msg, kind) {
+    statusEl.className = kind || "";
+    statusEl.textContent = msg;
+  }
+
+  function updateCount() {
+    var n = textEl.value.length;
+    countEl.textContent = n + (n === 1 ? " character" : " characters");
+  }
+
+  function getCode() {
+    var c = codeEl.value.replace(/[^0-9]/g, "");
+    if (c.length !== 6) { say("Enter a 6-digit code first.", "err"); codeEl.focus(); return null; }
+    return c;
+  }
+
+  codeEl.addEventListener("input", function () {
+    codeEl.value = codeEl.value.replace(/[^0-9]/g, "").slice(0, 6);
+    try { localStorage.setItem("journal-transfer-lastcode", codeEl.value); } catch (e) {}
+  });
+  textEl.addEventListener("input", updateCount);
+
+  $("btnSend").addEventListener("click", function () {
+    var code = getCode(); if (!code) return;
+    if (!textEl.value) { say("The box is empty. Write or paste something first.", "err"); return; }
+    say("Sending...");
+    Store.save(code, textEl.value, function (err) {
+      if (err) say(err, "err"); else say("Sent. Now tap Get on the other phone with code " + code + ".", "ok");
+    });
+  });
+
+  $("btnGet").addEventListener("click", function () {
+    var code = getCode(); if (!code) return;
+    say("Getting...");
+    Store.load(code, function (err, text) {
+      if (err) { say(err, "err"); return; }
+      textEl.value = text; updateCount();
+      say("Received. Tap Copy, then paste it into your notes app.", "ok");
+    });
+  });
+
+  // Copy: works on old iOS Safari (no clipboard API) and on Android
+  function legacyCopy() {
+    var ok = false;
+    var oldReadOnly = textEl.readOnly;
+    try {
+      textEl.readOnly = false;
+      textEl.focus();
+      textEl.select();
+      textEl.setSelectionRange(0, 9999999);
+      ok = document.execCommand("copy");
+    } catch (e) { ok = false; }
+    textEl.readOnly = oldReadOnly;
+    try { textEl.blur(); } catch (e2) {}
+    return ok;
+  }
+
+  $("btnCopy").addEventListener("click", function () {
+    if (!textEl.value) { say("Nothing to copy.", "err"); return; }
+    var done = function () { say("Copied to clipboard.", "ok"); };
+    var fail = function () {
+      if (legacyCopy()) { done(); }
+      else { say("Copy was blocked. Tap the text, choose Select All, then Copy.", "err"); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textEl.value).then(done, fail);
+    } else { fail(); }
+  });
+
+  // Paste: old iPhone Safari cannot read the clipboard from a button
+  $("btnPaste").addEventListener("click", function () {
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(function (t) {
+        textEl.value = t; updateCount(); say("Pasted.", "ok");
+      }, function () {
+        textEl.focus();
+        say("Paste was blocked. Press and hold in the box, then tap Paste.", "err");
+      });
+    } else {
+      textEl.focus();
+      say("On this phone: press and hold inside the box, then tap Paste.");
+    }
+  });
+
+  $("btnClear").addEventListener("click", function () {
+    textEl.value = ""; updateCount(); say("Cleared.");
+  });
+
+  // Start-up
+  try {
+    var last = localStorage.getItem("journal-transfer-lastcode");
+    if (last) codeEl.value = last;
+  } catch (e) {}
+  updateCount();
+  $("mode").textContent = Store.cloud
+    ? "Mode: cloud (works between phones)"
+    : "Mode: test only (this phone). Add Firestore to transfer between phones.";
+})();
+</script>
+</body>
+</html>
